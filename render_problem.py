@@ -166,7 +166,7 @@ def main(args):
                    output_scene = s_pre,
                    objects      = state.for_rendering())
 
-      for _ in args.num_steps:
+      for _ in range(args.num_steps):
         state.action_move()
 
       render_scene(args,
