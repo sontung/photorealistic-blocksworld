@@ -7,7 +7,7 @@
 
 import sys, random, os
 import bpy, bpy_extras
-
+from mathutils import Vector, Matrix
 
 """
 Some utility functions for interacting with Blender
@@ -41,6 +41,75 @@ def delete_object(obj):
   obj.select = True
   bpy.ops.object.delete()
 
+def image2world(cam, im_pos, scene):
+  from mathutils import Vector
+
+  (x, y, z) = im_pos
+  camera = cam.data
+
+  frame = [-v for v in camera.view_frame(scene=scene)[:3]]
+
+
+  if camera.type != 'ORTHO':
+      if x == 0.5 and y == 0.5 and z == 0.0:
+          return Vector((0.5, 0.5, 0.0))
+      else:
+          frame = [(v / (v.z / z)) for v in frame]
+
+  min_x, max_x = frame[1].x, frame[2].x
+  min_y, max_y = frame[0].y, frame[1].y
+
+  cx = x*(max_x-min_x)+min_x
+  cy = y*(max_y-min_y)+min_y
+
+  vec = Vector((cx, cy, -z))
+
+  # print(im_pos)
+  # print(vec)
+  # print([list(v) for v in list(cam.matrix_world.normalized())])
+  # print(vec*cam.matrix_world.normalized())
+  # print(cam.matrix_world.normalized()*vec)
+
+  return cam.matrix_world.normalized() * vec
+
+def important_data(cam):
+  scene = bpy.context.scene
+  camera = cam.data
+  frame = [-v for v in camera.view_frame(scene=scene)[:3]]
+  important_data = {"frame": [(fr.x, fr.y, fr.z) for fr in frame]}
+  important_data["matrix_world"] = [list(v) for v in list(cam.matrix_world.normalized())]
+  important_data["int"] = intrinsic_mat(camera)
+  return important_data
+
+def intrinsic_mat(cam):
+    # get the relevant data
+  scene = bpy.context.scene
+  # assume image is not scaled
+  assert scene.render.resolution_percentage == 100
+  # assume angles describe the horizontal field of view
+  assert cam.sensor_fit != 'VERTICAL'
+
+  f_in_mm = cam.lens
+  sensor_width_in_mm = cam.sensor_width
+
+  w = scene.render.resolution_x
+  h = scene.render.resolution_y
+
+  pixel_aspect = scene.render.pixel_aspect_y / scene.render.pixel_aspect_x
+
+  f_x = f_in_mm / sensor_width_in_mm * w
+  f_y = f_x * pixel_aspect
+
+  # yes, shift_x is inverted. WTF blender?
+  c_x = w * (0.5 - cam.shift_x)
+  # and shift_y is still a percentage of width..
+  c_y = h * 0.5 + w * cam.shift_y
+
+  K = [[f_x, 0, c_x],
+       [0, f_y, c_y],
+       [0,   0,   1]]
+  return [f_x, f_y, c_x, c_y]
+
 
 def get_camera_coords(cam, pos):
   """
@@ -62,6 +131,12 @@ def get_camera_coords(cam, pos):
   h = int(scale * scene.render.resolution_y)
   px = int(round(x * w))
   py = int(round(h - y * h))
+
+  res = image2world(cam, (x,y,z), scene)
+  d1, d2, d3 = res-pos
+  assert d1+d2+d3 <= 0.001, cam.location
+  # print(x, y, px/w, (h-py)/h, w, h)
+
   return (px, py, z)
 
 

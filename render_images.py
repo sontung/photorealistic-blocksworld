@@ -10,7 +10,9 @@ import math, sys, random, argparse, json, os, tempfile
 from datetime import datetime as dt
 from collections import Counter
 from copy import deepcopy as copy
-  
+import sys
+import mathutils
+import time
 """
 Renders random scenes using Blender, each with with a random number of objects;
 each object has a random size, position, color, and shape. Objects will be
@@ -52,7 +54,7 @@ def initialize_parser():
   parser.add_argument('--base-scene-blendfile', default='data/base_scene.blend',
                       help="Base blender file on which all scenes are based; includes " +
                       "ground plane, lights, and camera.")
-  parser.add_argument('--properties-json', default='data/properties.json',
+  parser.add_argument('--properties-json', default='data/shape-d1.json',
                       help="JSON file defining objects, materials, sizes, and colors. " +
                       "The \"colors\" field maps from CLEVR color names to RGB values; " +
                       "The \"sizes\" field maps from CLEVR size names to scalars used to " +
@@ -68,9 +70,9 @@ def initialize_parser():
   parser.add_argument('--num-objects', default=4, type=int,
                       help="The number of objects to place in each scene")
   
-  parser.add_argument('--max-margin', default=2.0, type=float,
+  parser.add_argument('--max-margin', default=3.0, type=float,
                       help="the maximum margin between the stacks")
-  parser.add_argument('--min-margin', default=1.5, type=float,
+  parser.add_argument('--min-margin', default=2.5, type=float,
                       help="the minimum margin between the stacks")
   
   parser.add_argument('--max-stacks', default=4, type=int,
@@ -131,7 +133,7 @@ def initialize_parser():
                       help="The magnitude of random jitter to add to the fill light position.")
   parser.add_argument('--back-light-jitter', default=1.0, type=float,
                       help="The magnitude of random jitter to add to the back light position.")
-  parser.add_argument('--camera-jitter', default=0.5, type=float,
+  parser.add_argument('--camera-jitter', default=0, type=float,
                       help="The magnitude of random jitter to add to the camera position")
   parser.add_argument('--render-num-samples', default=512, type=int,
                       help="The number of samples to use when rendering. Larger values will " +
@@ -219,21 +221,11 @@ def main(args):
   trans_blend_template = os.path.join(trans_blend_dir,template)
   
   # set up objects (except locations)
+
   objects = initialize_objects(args)
   stack_x = initialize_stack_x(args)
-  if args.initial_objects:
-    if os.path.isfile(args.initial_objects):
-      with open(args.initial_objects, 'r') as f:
-        init = json.load(f)
-        objects = init["objects"]
-        stack_x = init["stack_x"]
-    else:
-      with open(args.initial_objects, 'w') as f:
-        init = {"objects":objects, "stack_x":stack_x}
-        json.dump(init, f, indent=4)
 
-  print(objects,stack_x)
-  
+
   states = -1
   hashtable = dict()
   for objects, stacks in enumerate_stack(objects, stack_x):
@@ -256,13 +248,43 @@ def main(args):
     if args.dry_run:
       continue
     
+    change_cam_loc = True
+
     render_scene(args,
                  output_index=states,
                  output_split=args.split,
                  output_image=img_path,
                  output_scene=scene_path,
-                 # output_blendfile=blend_path,
-                 objects=objects)
+                 objects=objects,
+                 )
+    default_cam_loc = bpy.data.objects['Camera'].location
+    print("def", default_cam_loc)
+    if change_cam_loc:
+      looking_direction = mathutils.Vector((7.0000, -16.0000, 6.0000)) - mathutils.Vector((0.0, 3, 0.0))
+      rot_quat = looking_direction.to_track_quat('Z', 'Y')
+      # camera.rotation_euler = rot_quat.to_euler()
+      # camera.location[0] += 5
+      render_scene(args,
+                 output_index=states,
+                 output_split=args.split,
+                 output_image="".join([img_path.split(".png")[0], "_"+"cam1", ".png"]),
+                 output_scene="".join([scene_path.split(".json")[0], "_"+"cam1", ".json"]),
+                 objects=objects,
+                 new_cam_loc=mathutils.Vector((7.0000, -16.0000, 6.0000)),
+                 new_rot=rot_quat.to_euler()
+                 )
+      looking_direction = mathutils.Vector((-7.0000, -16.0000, 6.0000)) - mathutils.Vector((0.0, 3, 0.0))
+      rot_quat = looking_direction.to_track_quat('Z', 'Y')
+      render_scene(args,
+                 output_index=states,
+                 output_split=args.split,
+                 output_image="".join([img_path.split(".png")[0], "_"+"cam2", ".png"]),
+                 output_scene="".join([scene_path.split(".json")[0], "_"+"cam2", ".json"]),
+                 objects=objects,
+                 new_cam_loc=mathutils.Vector((-7.0000, -16.0000, 6.0000)),
+                 new_rot=rot_quat.to_euler()
+                 )
+
   print(states+1,"states")
   
   states = -1
@@ -274,10 +296,10 @@ def main(args):
       continue
     states +=1
     hashset.add(key)
-    for objects_suc in enumerate_successor_stack(stacks, stack_x):
+    for objects_suc, act_label in enumerate_successor_stack(stacks, stack_x):
       transitions+=1
       if 0 == (transitions%10000):
-        print(transitions)
+        print("transition", transitions)
       if not (args.start_idx <= states < args.start_idx + args.num_images ):
         continue
       prekey = scene_hashkey(objects_pre)
@@ -331,10 +353,10 @@ def main(args):
       s_suc = os.path.join("..","scene",os.path.basename(s_suc))
       b_suc = os.path.join("..","blend",os.path.basename(b_suc))
       
-      i_pre2 = trans_img_template   % transitions+"_pre.png"
+      i_pre2 = trans_img_template   % transitions+"_pre_%s.png" % (act_label)
       s_pre2 = trans_scene_template % transitions+"_pre.json"
       b_pre2 = trans_blend_template % transitions+"_pre"
-      i_suc2 = trans_img_template   % transitions+"_suc.png"
+      i_suc2 = trans_img_template   % transitions+"_suc_%s.png" % (act_label)
       s_suc2 = trans_scene_template % transitions+"_suc.json"
       b_suc2 = trans_blend_template % transitions+"_suc"
       
@@ -359,118 +381,139 @@ def render_scene(args,
     output_split='none',
     output_image='render.png',
     output_scene='render_json',
-    output_blendfile=None,
-    objects=[],
+    output_blendfile=None, change_cam_loc=False,
+    objects=[], add_noise=False, new_cam_loc=None, new_rot=None
   ):
+  if not add_noise:
 
-  # Load the main blendfile
-  bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
+    def rand(L):
+      return 2.0 * L * (random.random() - 0.5)
+    
+    # Load the main blendfile
+    bpy.ops.wm.open_mainfile(filepath=args.base_scene_blendfile)
 
-  # Load materials
-  utils.load_materials(args.material_dir)
+    # Load materials
+    utils.load_materials(args.material_dir)
 
-  # Set render arguments so we can get pixel coordinates later.
-  # We use functionality specific to the CYCLES renderer so BLENDER_RENDER
-  # cannot be used.
-  render_args = bpy.context.scene.render
-  render_args.engine = "CYCLES"
-  render_args.filepath = output_image
-  render_args.resolution_x = args.width
-  render_args.resolution_y = args.height
-  render_args.resolution_percentage = 100
-  render_args.tile_x = args.render_tile_size
-  render_args.tile_y = args.render_tile_size
-  if args.use_gpu == 1:
-    # Blender changed the API for enabling CUDA at some point
-    if bpy.app.version < (2, 78, 0):
-      bpy.context.user_preferences.system.compute_device_type = 'CUDA'
-      bpy.context.user_preferences.system.compute_device = 'CUDA_0'
-    else:
-      cycles_prefs = bpy.context.user_preferences.addons['cycles'].preferences
-      cycles_prefs.compute_device_type = 'CUDA'
+    # Set render arguments so we can get pixel coordinates later.
+    # We use functionality specific to the CYCLES renderer so BLENDER_RENDER
+    # cannot be used.
+    render_args = bpy.context.scene.render
+    render_args.engine = "CYCLES"
+    render_args.filepath = output_image
+    render_args.resolution_x = args.width
+    render_args.resolution_y = args.height
+    render_args.resolution_percentage = 100
+    render_args.tile_x = args.render_tile_size
+    render_args.tile_y = args.render_tile_size
+    if args.use_gpu == 1:
+      # Blender changed the API for enabling CUDA at some point
+      if bpy.app.version < (2, 78, 0):
+        bpy.context.user_preferences.system.compute_device_type = 'CUDA'
+        bpy.context.user_preferences.system.compute_device = 'CUDA_0'
+      else:
+        cycles_prefs = bpy.context.user_preferences.addons['cycles'].preferences
+        cycles_prefs.compute_device_type = 'CUDA'
 
-  # Some CYCLES-specific stuff
-  bpy.data.worlds['World'].cycles.sample_as_light = True
-  bpy.context.scene.cycles.blur_glossy = 2.0
-  bpy.context.scene.cycles.samples = args.render_num_samples
-  bpy.context.scene.cycles.transparent_min_bounces = args.render_min_bounces
-  bpy.context.scene.cycles.transparent_max_bounces = args.render_max_bounces
-  if args.use_gpu == 1:
-    bpy.context.scene.cycles.device = 'GPU'
+    # Some CYCLES-specific stuff
+    bpy.data.worlds['World'].cycles.sample_as_light = True
+    bpy.context.scene.cycles.blur_glossy = 2.0
+    bpy.context.scene.cycles.samples = args.render_num_samples
+    bpy.context.scene.cycles.transparent_min_bounces = args.render_min_bounces
+    bpy.context.scene.cycles.transparent_max_bounces = args.render_max_bounces
+    if args.use_gpu == 1:
+      bpy.context.scene.cycles.device = 'GPU'
 
-  # This will give ground-truth information about the scene and its objects
-  scene_struct = {
-      'split': output_split,
-      'image_index': output_index,
-      'image_filename': os.path.basename(output_image),
-      'objects': [],
-      'directions': {},
-  }
+    # This will give ground-truth information about the scene and its objects
+    scene_struct = {
+        'split': output_split,
+        'image_index': output_index,
+        'image_filename': os.path.basename(output_image),
+        'objects': [],
+        'directions': {},
+    }
 
-  # Put a plane on the ground so we can compute cardinal directions
-  bpy.ops.mesh.primitive_plane_add(radius=5)
-  plane = bpy.context.object
+    # Put a plane on the ground so we can compute cardinal directions
+    bpy.ops.mesh.primitive_plane_add(radius=5)
+    plane = bpy.context.object
 
-  def rand(L):
-    return 2.0 * L * (random.random() - 0.5)
+    camera = bpy.data.objects['Camera']
+    if new_cam_loc is not None:
+      camera.location = new_cam_loc
+    if new_rot is not None:
+      camera.rotation_euler = new_rot
 
-  # Add random jitter to camera position
-  if args.camera_jitter > 0:
-    for i in range(3):
-      bpy.data.objects['Camera'].location[i] += rand(args.camera_jitter)
+    # Figure out the left, up, and behind directions along the plane and record
+    # them in the scene structure
+    plane_normal = plane.data.vertices[0].normal
+    cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
+    cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
+    cam_up = camera.matrix_world.to_quaternion() * Vector((0, 1, 0))
+    plane_behind = (cam_behind - cam_behind.project(plane_normal)).normalized()
+    plane_left = (cam_left - cam_left.project(plane_normal)).normalized()
+    plane_up = cam_up.project(plane_normal).normalized()
 
-  # Figure out the left, up, and behind directions along the plane and record
-  # them in the scene structure
-  camera = bpy.data.objects['Camera']
-  plane_normal = plane.data.vertices[0].normal
-  cam_behind = camera.matrix_world.to_quaternion() * Vector((0, 0, -1))
-  cam_left = camera.matrix_world.to_quaternion() * Vector((-1, 0, 0))
-  cam_up = camera.matrix_world.to_quaternion() * Vector((0, 1, 0))
-  plane_behind = (cam_behind - cam_behind.project(plane_normal)).normalized()
-  plane_left = (cam_left - cam_left.project(plane_normal)).normalized()
-  plane_up = cam_up.project(plane_normal).normalized()
+    # Delete the plane; we only used it for normals anyway. The base scene file
+    # contains the actual ground plane.
+    utils.delete_object(plane)
 
-  # Delete the plane; we only used it for normals anyway. The base scene file
-  # contains the actual ground plane.
-  utils.delete_object(plane)
+    # Save all six axis-aligned directions in the scene struct
+    scene_struct['directions']['behind'] = tuple(plane_behind)
+    scene_struct['directions']['front'] = tuple(-plane_behind)
+    scene_struct['directions']['left'] = tuple(plane_left)
+    scene_struct['directions']['right'] = tuple(-plane_left)
+    scene_struct['directions']['above'] = tuple(plane_up)
+    scene_struct['directions']['below'] = tuple(-plane_up)
 
-  # Save all six axis-aligned directions in the scene struct
-  scene_struct['directions']['behind'] = tuple(plane_behind)
-  scene_struct['directions']['front'] = tuple(-plane_behind)
-  scene_struct['directions']['left'] = tuple(plane_left)
-  scene_struct['directions']['right'] = tuple(-plane_left)
-  scene_struct['directions']['above'] = tuple(plane_up)
-  scene_struct['directions']['below'] = tuple(-plane_up)
+    # Now make some random objects
+    blender_objects = add_objects(scene_struct, camera, objects)
 
-  # Add random jitter to lamp positions
-  if args.key_light_jitter > 0:
-    for i in range(3):
-      bpy.data.objects['Lamp_Key'].location[i] += rand(args.key_light_jitter)
-  if args.back_light_jitter > 0:
-    for i in range(3):
-      bpy.data.objects['Lamp_Back'].location[i] += rand(args.back_light_jitter)
-  if args.fill_light_jitter > 0:
-    for i in range(3):
-      bpy.data.objects['Lamp_Fill'].location[i] += rand(args.fill_light_jitter)
+    # Render the scene and dump the scene data structure
+    scene_struct['objects'] = objects
+    scene_struct['relationships'] = compute_all_relationships(scene_struct)
 
-  # Now make some random objects
-  blender_objects = add_objects(scene_struct, camera, objects)
+    while True:
+      try:
+        bpy.ops.render.render(write_still=True)
+        break
+      except Exception as e:
+        print(e)
 
-  # Render the scene and dump the scene data structure
-  scene_struct['objects'] = objects
-  scene_struct['relationships'] = compute_all_relationships(scene_struct)
-  while True:
-    try:
-      bpy.ops.render.render(write_still=True)
-      break
-    except Exception as e:
-      print(e)
+    with open(output_scene, 'w') as f:
+      json.dump(scene_struct, f, indent=2)
 
-  with open(output_scene, 'w') as f:
-    json.dump(scene_struct, f, indent=2)
+    if output_blendfile is not None:
+      bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
 
-  if output_blendfile is not None:
-    bpy.ops.wm.save_as_mainfile(filepath=output_blendfile)
+
+  else:
+    for added in [0.5, 1, 2]:
+      loc_dict = {}
+      objects_args = objects.copy()
+      for ob in objects_args:
+        if ob["location"][0] not in loc_dict:
+          loc_dict[ob["location"][0]] = ob["location"][0]
+      new_loc = new_stack_x(args, added)
+      for idx, k in enumerate(sorted(loc_dict.keys(), key=lambda z: loc_dict[z])):
+        loc_dict[k] = new_loc[idx]
+      for ob in objects_args:
+        ob["location"] = (loc_dict[ob["location"][0]], ob["location"][1], ob["location"][2])
+      new_im_path = "".join([output_image.split(".png")[0], "_"+str(added), ".png"])
+      new_scene_path = "".join([output_scene.split(".json")[0], "_"+str(added), ".json"])
+      if os.path.isfile(new_im_path):
+        continue
+      render_scene(args, output_index, output_split, new_im_path,
+                   new_scene_path, output_blendfile, objects_args,
+                   False)
+
+def new_stack_x(args, margin):
+  # compute the stack positions
+  stack_x = [0]
+  for i in range(args.max_stacks-1):
+    stack_x.append(stack_x[-1]+random.uniform(1.5+margin, margin+2))
+  center  = stack_x[-1] / 2
+  stack_x = [ x - center for x in stack_x ]
+  return stack_x
 
 def random_dict(dict):
   return random.choice(list(dict.items()))
@@ -487,16 +530,64 @@ def object_equal(o1, o2):
     o1["size"]     == o2["size"]     and \
     o1["color"]    == o2["color"]
 
-def initialize_objects(args):
+def initialize_objects(args, add_base=False, add_sphere=True):
 
   # adding objects
   objects         = []
+  
+  color_for_bases = [
+  [0.5058823529411764, 0.2901960784313726, 0.09803921568627451, 1.0], 
+  [0.5058823529411764, 0.14901960784313725, 0.7529411764705882, 1.0], 
+  [0.1607843137254902, 0.8156862745098039, 0.8156862745098039, 1.0]]
+
+  if add_base:
+    shape_for_base = {
+    "cube": "SmoothCube_v2",
+    "cylinder": "SmoothCylinder"
+  }
+    for i in range(args.max_stacks):
+      while True:
+        shape_name, shape_path = random_dict(shape_for_base)
+        rgba                   = color_for_bases[i]
+        sz_name, r             = random_dict({"large": 0.7})
+        rotation               = 360.0 * random.random()
+        # For cube, adjust the size a bit
+        if shape_name == 'cube':
+          r /= math.sqrt(2)
+
+        obj = {
+          'shape': shape_path,
+          'size': r,
+          'stackable': properties['stackable'][shape_name] == 1,
+          'rotation': rotation,
+          'color':tuple(rgba),
+          'size_name': sz_name,
+          'moveable': False,
+          'material': 'Rubber'
+        }
+        assert 'size_name' in obj
+        ok = True
+        for o2 in objects:
+          if object_equal(obj, o2) or obj['color'] == o2['color']:
+            ok = False
+            break
+        if ok:
+          break
+
+      objects.append(obj)
+
+  sphere_chosen = False  # only one sphere is allowed
   for i in range(args.num_objects):
     while True:
-      shape_name, shape_path = random_dict(properties['shapes'])
+      if not sphere_chosen and add_sphere:
+        shape_name, shape_path = "sphere", "Sphere"
+        sphere_chosen = True
+      else:
+        shape_name, shape_path = random_dict({"cube": "SmoothCube_v2"})
       _, rgba                = random_dict(color_name_to_rgba)
-      _, r                   = random_dict(properties['sizes'])
+      sz_name, r             = random_dict(properties['sizes'])
       rotation               = 360.0 * random.random()
+
       # For cube, adjust the size a bit
       if shape_name == 'cube':
         r /= math.sqrt(2)
@@ -507,7 +598,10 @@ def initialize_objects(args):
         'stackable': properties['stackable'][shape_name] == 1,
         'rotation': rotation,
         'color':tuple(rgba),
+        'size_name': sz_name,
+        'moveable': True,
       }
+      assert 'size_name' in obj
       ok = True
       for o2 in objects:
         if object_equal(obj, o2) or obj['color'] == o2['color']:
@@ -515,18 +609,20 @@ def initialize_objects(args):
           break
       if ok:
         break
-    
+    print([c*255 for c in obj['color']])
+    # sys.exit()
     objects.append(obj)
   return objects
 
-def initialize_stack_x(args):
+def initialize_stack_x(args, fixed_depth=True):
   # compute the stack positions
   stack_x = [0]
   for i in range(args.max_stacks-1):
-    stack_x.append(stack_x[-1]+random.uniform(args.min_margin, args.max_margin))
+    stack_x.append(stack_x[-1]+3)
   center  = stack_x[-1] / 2
-  stack_x = [ x - center for x in stack_x ]
-  return stack_x
+  stack_x2 = [ (x - center, -2) for du, x in enumerate(stack_x) ]
+  stack_x2.extend([ (x - center, 2) for du, x in enumerate(stack_x) ])
+  return stack_x2
 
 def initialize_stacks(stack_x):
   stacks = []
@@ -538,23 +634,26 @@ def update_locations(stacks, stack_x):
   for stack, x_base in zip(stacks, stack_x):
     tmp_stack = []
     for obj in stack:
-      x = x_base
-      y = 0
+      x = x_base[0]
+      y = x_base[1]
       z = stack_height(tmp_stack) + obj["size"]
       obj["location"] = (x,y,z)
       tmp_stack.append(obj)
     
-def collect_objects(stacks):
+def collect_objects(stacks, action_label):
   objects = []
   for stack in stacks:
     objects.extend(stack)
-  return objects
+  return objects, action_label
 
 def enumerate_stack(objects, stack_x):
   objects = copy(objects)
-  objects_tmp = [ o for o in objects ] # not the deep copy
+  objects_tmp = [ o for o in objects if o["moveable"]] # not the deep copy
   stacks = initialize_stacks(stack_x)
   sl = len(stacks)
+  objects_nonmove = [ o for o in objects if not o["moveable"]]
+  for du3 in range(len(objects_nonmove)):
+    stacks[du3].append(objects_nonmove[du3])
   
   def rec(_objs):
     ol = len(_objs)
@@ -567,6 +666,7 @@ def enumerate_stack(objects, stack_x):
             obj["material"] = m
             yield from rec(_objs)
             del obj["material"]
+            break
           stacks[s].pop()
         _objs.insert(o,obj)
     else:
@@ -580,13 +680,15 @@ def action_move(stacks, stack_x):
   for i in nonempty_stacks:
     different_stacks = [j for j,stack in enumerate(stacks) if j != i]
     for j in different_stacks:
-      obj = stacks[i].pop()
-      stacks[j].append(obj)
-      update_locations(stacks,stack_x)
-      yield collect_objects(stacks)
-      stacks[j].pop()
-      stacks[i].append(obj)
-      update_locations(stacks,stack_x)
+      if len(stacks[i]) > 1:
+        obj = stacks[i].pop()
+        stacks[j].append(obj)
+        update_locations(stacks,stack_x)
+        action_label = "%d%d" % (i, j)
+        yield collect_objects(stacks, action_label)
+        stacks[j].pop()
+        stacks[i].append(obj)
+        update_locations(stacks,stack_x)
       
 def action_change_material(stacks, stack_x):
   nonempty_stacks  = [i for i,stack in enumerate(stacks) if stack]
@@ -611,7 +713,7 @@ def action_remove(stacks, stack_x):
 
 actions = [
   action_move,
-  action_change_material,
+  # action_change_material,
   # action_remove
 ]
 
@@ -661,6 +763,7 @@ def add_objects(scene_struct, camera, objects):
     xmin = np.amin(corners_camera_coords[:,0])
     ymin = np.amin(corners_camera_coords[:,1])
     obj["bbox"] = (float(xmin), float(ymin), float(xmax), float(ymax))
+    obj["recon_data"] = utils.important_data(camera)
   return blender_objects
 
 def compute_all_relationships(scene_struct, eps=0.2):

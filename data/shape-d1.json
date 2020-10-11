@@ -1,27 +1,24 @@
 {
   "shapes": {
     "cube": "SmoothCube_v2",
-    "cylinder": "SmoothCylinder"
+    "sphere": "Sphere"
   },
   "stackable": {
     "cube": 1,
-    "sphere": 0,
-    "cylinder": 1
+    "sphere": 1
   },
   "colors": {
     "gray": [87, 87, 87],
     "red": [173, 35, 35],
     "blue": [42, 75, 215],
     "green": [29, 105, 20],
-    "yellow": [255, 238, 51],
-    "pink": [255, 102, 255],
-    "brown": [42, 87, 9]
+    "yellow": [50, 168, 149]
+
   },
   "materials": {
-    "rubber": "Rubber"  
+    "rubber": "Rubber"
 },
   "sizes": {
-    "large": 0.7,
-    "small": 0.7
+    "large": 0.9
   }
 }

@@ -5,3 +5,6 @@
 output/
 /*.json
 /*.npz
+block*/
+.idea/
+*.zip

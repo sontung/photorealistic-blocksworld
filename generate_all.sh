@@ -29,8 +29,8 @@ blender="blender -noaudio --background --python render_images.py -- \
       --initial-objects $prefix-init.json                \
       --statistics      $prefix-stat.json                \
       --render-num-samples 300                           \
-      --width 300                                        \
-      --height 200                                       \
+      --width 128                                        \
+      --height 128                                       \
       --num-objects $objs                                \
       --max-stacks $stacks                               "
 
